@@ -1,17 +1,16 @@
 """
-LLM client using Groq.
+LLM client using Google Gemini.
 
-Groq is used only for text generation.
-
-Important:
-This client does NOT provide browser/search tools to the LLM.
+Gemini is used only for text generation.
 Web searching is handled separately by SearchTool.
 """
 
-import random
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
+
+from google import genai
+from google.genai import types
 
 from .config import settings
 
@@ -26,129 +25,103 @@ class LLMResponse:
 class LLMClient:
 
     def __init__(self):
-
         self.live = settings.LIVE_LLM
-
         self._client = None
 
         if self.live:
-
-            from groq import Groq
-
-            self._client = Groq(
-                api_key=settings.GROQ_API_KEY
+            self._client = genai.Client(
+                api_key=settings.GEMINI_API_KEY
             )
 
-    # =============================================================
+    # =========================================================
     # COMPLETE
-    # =============================================================
+    # =========================================================
 
     def complete(
         self,
         system: str,
         prompt: str,
         max_tokens: int = 1024,
-        response_format: Optional[Dict[str, Any]] = None
+        response_format: Optional[Dict[str, Any]] = None,
     ) -> LLMResponse:
 
-        if not self.live:
+        # -----------------------------------------------------
+        # MOCK MODE
+        # -----------------------------------------------------
 
-            return self._mock_complete(
-                system,
-                prompt
-            )
+        if not self.live:
+            return self._mock_complete(system, prompt)
 
         last_err = None
 
-        for attempt in range(
+        max_attempts = max(
             1,
-            settings.MAX_RETRIES + 1
-        ):
+            settings.MAX_RETRIES
+        )
+
+        for attempt in range(1, max_attempts + 1):
 
             try:
 
-                request_args = {
+                # -------------------------------------------------
+                # Gemini generation configuration
+                # -------------------------------------------------
 
-                    "model": settings.MODEL_NAME,
-
-                    "messages": [
-
-                        {
-                            "role": "system",
-                            "content": system
-                        },
-
-                        {
-                            "role": "user",
-                            "content": prompt
-                        }
-
-                    ],
-
-                    "max_completion_tokens": max_tokens,
-
+                config_kwargs = {
+                    "system_instruction": system,
                     "temperature": 0.2,
-
-                    # IMPORTANT:
-                    # Do not allow automatic tool calls.
-                    "tool_choice": "none"
+                    "max_output_tokens": max_tokens,
                 }
 
-                # -------------------------------------------------
-                # Response format is optional.
-                # -------------------------------------------------
-
+                # Request JSON when the caller expects JSON.
                 if response_format is not None:
-
-                    request_args[
-                        "response_format"
-                    ] = response_format
-
-                # -------------------------------------------------
-                # Groq request
-                # -------------------------------------------------
-
-                response = (
-                    self._client
-                    .chat
-                    .completions
-                    .create(
-                        **request_args
+                    config_kwargs["response_mime_type"] = (
+                        "application/json"
                     )
+
+                config = types.GenerateContentConfig(
+                    **config_kwargs
                 )
 
                 # -------------------------------------------------
-                # Extract text
+                # Gemini API call
                 # -------------------------------------------------
 
-                text = ""
+                response = self._client.models.generate_content(
+                    model=settings.MODEL_NAME,
+                    contents=prompt,
+                    config=config,
+                )
 
-                if response.choices:
+                # -------------------------------------------------
+                # Extract response text
+                # -------------------------------------------------
 
-                    message = response.choices[
-                        0
-                    ].message
-
-                    text = (
-                        message.content
-                        or ""
-                    )
+                text = getattr(
+                    response,
+                    "text",
+                    ""
+                ) or ""
 
                 # -------------------------------------------------
                 # Token usage
                 # -------------------------------------------------
 
-                usage = response.usage
-
                 input_tokens = 0
                 output_tokens = 0
+
+                usage = getattr(
+                    response,
+                    "usage_metadata",
+                    None
+                )
 
                 if usage:
 
                     input_tokens = (
                         getattr(
                             usage,
-                            "prompt_tokens",
+                            "prompt_token_count",
                             0
                         )
                         or 0
@@ -157,37 +130,44 @@ class LLMClient:
                     output_tokens = (
                         getattr(
                             usage,
-                            "completion_tokens",
+                            "candidates_token_count",
                             0
                         )
                         or 0
                     )
 
                 # -------------------------------------------------
-                # Empty response handling
+                # Empty response
                 # -------------------------------------------------
 
                 if not text.strip():
 
-                    print(
-                        "Groq returned an empty response."
-                    )
+                    if attempt < max_attempts:
 
-                    if attempt < settings.MAX_RETRIES:
+                        print(
+                            "Gemini returned an empty response. "
+                            "Retrying..."
+                        )
 
-                        time.sleep(1)
+                        time.sleep(
+                            2 ** attempt
+                        )
 
                         continue
 
+                    raise RuntimeError(
+                        "Gemini returned an empty response."
+                    )
+
                 return LLMResponse(
-
-                    text=text,
-
+                    text=text.strip(),
                     input_tokens=input_tokens,
-
-                    output_tokens=output_tokens
-
+                    output_tokens=output_tokens,
                 )
+
+            # -----------------------------------------------------
+            # API ERROR
+            # -----------------------------------------------------
 
             except Exception as e:
 
@@ -197,66 +177,67 @@ class LLMClient:
                 error_text = str(e)
 
                 print(
-                    f"Groq API error "
-                    f"(attempt {attempt}/"
-                    f"{settings.MAX_RETRIES}): "
-                    f"{error_name}: "
-                    f"{error_text}"
+                    f"Gemini API error "
+                    f"(attempt {attempt}/{max_attempts}): "
+                    f"{error_name}: {error_text}"
                 )
 
                 # -------------------------------------------------
-                # JSON validation errors should not be retried
-                # repeatedly.
+                # Authentication errors
                 # -------------------------------------------------
 
-                if (
-                    "json_validate_failed"
-                    in error_text
-                    or
-                    "Failed to generate JSON"
-                    in error_text
-                    or
-                    "Failed to validate JSON"
-                    in error_text
-                ):
-
-                    break
-
-                # -------------------------------------------------
-                # Tool-use errors should not be repeatedly retried.
-                # -------------------------------------------------
-
-                if (
-                    "tool_use_failed"
-                    in error_text
-                    or
-                    "Tool choice is none"
-                    in error_text
-                ):
-
-                    break
-
-                # -------------------------------------------------
-                # Normal retry
-                # -------------------------------------------------
-
-                sleep_s = min(
-                    (2 ** attempt)
-                    + random.random(),
-                    15
+                authentication_error = (
+                    "401" in error_text
+                    or "403" in error_text
+                    or "API key" in error_text
+                    or "authentication" in error_text.lower()
                 )
 
-                time.sleep(sleep_s)
+                if authentication_error:
+                    break
+
+                # -------------------------------------------------
+                # Temporary/retryable errors
+                # -------------------------------------------------
+
+                retryable = (
+                    "429" in error_text
+                    or "RESOURCE_EXHAUSTED" in error_text
+                    or "500" in error_text
+                    or "502" in error_text
+                    or "503" in error_text
+                    or "504" in error_text
+                    or "UNAVAILABLE" in error_text
+                    or "TIMEOUT" in error_text.upper()
+                )
+
+                if not retryable:
+                    break
+
+                if attempt < max_attempts:
+
+                    wait_seconds = 2 ** attempt
+
+                    print(
+                        f"Retrying Gemini in "
+                        f"{wait_seconds} seconds..."
+                    )
+
+                    time.sleep(wait_seconds)
+
+        # ---------------------------------------------------------
+        # All attempts failed
+        # ---------------------------------------------------------
 
         raise RuntimeError(
-            "LLM call failed after "
-            f"{settings.MAX_RETRIES} attempts: "
+            "Gemini call failed after "
+            f"{max_attempts} attempts: "
             f"{last_err}"
         )
 
-    # =============================================================
-    # MOCK RESPONSE
-    # =============================================================
+    # =========================================================
+    # MOCK MODE
+    # =========================================================
 
     def _mock_complete(
         self,
@@ -264,10 +245,7 @@ class LLMClient:
         prompt: str
     ) -> LLMResponse:
 
-        if (
-            "Break the user's research question"
-            in system
-        ):
+        if "Break the user's research question" in system:
 
             text = (
                 '["What is the current state of '
@@ -283,8 +261,8 @@ class LLMClient:
 
             text = (
                 "Mock research result. Configure "
-                "GROQ_API_KEY to generate a real "
-                "LLM response."
+                "GEMINI_API_KEY to generate "
+                "a real Gemini response."
             )
 
         elif "fact-checking critic" in system:
@@ -300,16 +278,13 @@ class LLMClient:
                 "0.80"
             )
 
-        elif (
-            "professional research report"
-            in system
-        ):
+        elif "professional research report" in system:
 
             text = (
                 "# Research Report\n\n"
                 "Mock report. Configure "
-                "GROQ_API_KEY to generate "
-                "a real research report."
+                "GEMINI_API_KEY to generate "
+                "a real Gemini report."
             )
 
         else:
@@ -317,13 +292,9 @@ class LLMClient:
             text = "Mock response."
 
         return LLMResponse(
-
             text=text,
-
             input_tokens=len(prompt) // 4,
-
-            output_tokens=len(text) // 4
-
+            output_tokens=len(text) // 4,
         )
 
 
@@ -335,5 +306,11 @@ def estimate_cost_usd(
     input_tokens: int,
     output_tokens: int
 ) -> float:
+    """
+    Cost calculation placeholder.
+
+    Kept at zero because the application currently
+    does not maintain Gemini pricing data.
+    """
 
     return 0.0

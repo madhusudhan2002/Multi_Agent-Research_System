@@ -8,11 +8,11 @@ Usage:
     python demo.py --query "..." --quiet
 
 The project uses:
-    - Groq for the LLM
+    - Gemini for the LLM
     - DuckDuckGo for web search
     - Mock LLM/search only as fallbacks
 
-Configure GROQ_API_KEY in your .env file for live LLM responses.
+Configure GEMINI_API_KEY in your .env file for live LLM responses.
 
 The search tool uses DuckDuckGo and does not require a Tavily API key.
 """
@@ -70,10 +70,10 @@ def main():
 
     print(f"Query   : {args.query}")
 
-    # Groq LLM status
+    # Gemini LLM status
     print(
         "LLM mode: "
-        f"{'LIVE (Groq API)' if settings.LIVE_LLM else 'MOCK (no API key set)'}"
+        f"{'LIVE (Gemini API)' if settings.LIVE_LLM else 'MOCK (no API key set)'}"
     )
 
     # Current search implementation

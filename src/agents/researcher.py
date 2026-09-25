@@ -2,7 +2,7 @@
 Researcher Agent.
 
 Uses the external SearchTool for web research and
-Groq only for analyzing the search results.
+Gemini only for analyzing the search results.
 
 The LLM itself does NOT have browser access.
 """

@@ -105,7 +105,7 @@ class Orchestrator:
         if not settings.LIVE_LLM:
 
             log_info(
-                "No GROQ_API_KEY found — "
+                "No GEMINI_API_KEY found — "
                 "running in MOCK MODE."
             )
 
