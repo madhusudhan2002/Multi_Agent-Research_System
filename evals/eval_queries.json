@@ -1,0 +1,22 @@
+[
+  {
+    "id": "eval_1",
+    "query": "What are the main approaches to reducing hallucinations in LLMs?",
+    "expected_topics": ["retrieval augmentation", "fine-tuning", "prompting", "fact-checking"]
+  },
+  {
+    "id": "eval_2",
+    "query": "What is the current state of solid-state EV batteries?",
+    "expected_topics": ["energy density", "manufacturing", "major companies", "timeline"]
+  },
+  {
+    "id": "eval_3",
+    "query": "How do multi-agent AI systems handle disagreement between agents?",
+    "expected_topics": ["voting", "critic/reviewer pattern", "escalation", "consensus"]
+  },
+  {
+    "id": "eval_4",
+    "query": "What are the biggest open problems in AI agent memory systems?",
+    "expected_topics": ["long-term memory", "context window limits", "retrieval", "forgetting"]
+  }
+]
