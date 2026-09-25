@@ -4,10 +4,14 @@ Web search tool used by the Researcher agent.
 Uses DuckDuckGo for live web search without requiring
 a Tavily API key.
 
-Falls back to deterministic mock results if the live
-search fails.
+If DuckDuckGo temporarily fails, the search is retried
+with a simplified query. If no results are available,
+an empty result list is returned rather than fabricated
+sources.
 """
 
+import time
+import re
 from typing import List
 
 from .models import SearchResult
@@ -21,7 +25,10 @@ class SearchTool:
         DuckDuckGo via the ddgs package
 
     Fallback:
-        Deterministic mock results
+        Retry with a simplified query.
+
+    Important:
+        No fabricated/mock sources are returned.
     """
 
     def __init__(self):
@@ -33,72 +40,109 @@ class SearchTool:
         max_results: int = 4
     ) -> List[SearchResult]:
 
-        try:
-            from ddgs import DDGS
+        queries = [
+            query,
+            self._simplify_query(query),
+        ]
 
-            results = []
+        last_error = None
 
-            with DDGS() as ddgs:
+        for attempt, search_query in enumerate(queries, start=1):
 
-                search_results = ddgs.text(
-                    query,
-                    max_results=max_results
-                )
+            if not search_query.strip():
+                continue
 
-                for result in search_results:
+            try:
+                from ddgs import DDGS
 
-                    results.append(
-                        SearchResult(
-                            title=result.get(
-                                "title",
-                                "Untitled"
-                            ),
-                            url=result.get(
-                                "href",
-                                ""
-                            ),
-                            snippet=result.get(
-                                "body",
-                                ""
-                            )[:400]
-                        )
+                results = []
+
+                with DDGS() as ddgs:
+
+                    search_results = ddgs.text(
+                        search_query,
+                        max_results=max_results
                     )
 
-            if results:
-                return results
+                    for result in search_results:
 
-            return self._mock_search(
-                query,
-                max_results
-            )
+                        title = result.get(
+                            "title",
+                            "Untitled"
+                        )
 
-        except Exception as e:
+                        url = result.get(
+                            "href",
+                            ""
+                        )
 
+                        snippet = result.get(
+                            "body",
+                            ""
+                        )
+
+                        if not url and not snippet:
+                            continue
+
+                        results.append(
+                            SearchResult(
+                                title=title,
+                                url=url,
+                                snippet=snippet[:400]
+                            )
+                        )
+
+                if results:
+                    return results
+
+                print(
+                    f"Web search returned no results "
+                    f"(attempt {attempt}/{len(queries)}): "
+                    f"{search_query}"
+                )
+
+            except Exception as e:
+
+                last_error = e
+
+                print(
+                    f"Web search failed "
+                    f"(attempt {attempt}/{len(queries)}): "
+                    f"{type(e).__name__}: {e}"
+                )
+
+                if attempt < len(queries):
+                    time.sleep(1)
+
+        if last_error:
             print(
-                f"Web search failed: {e}"
+                "Web search unavailable after retries. "
+                "No fabricated sources will be returned."
+            )
+        else:
+            print(
+                "Web search returned no results after retries."
             )
 
-            return self._mock_search(
-                query,
-                max_results
-            )
+        return []
 
     @staticmethod
-    def _mock_search(
-        query: str,
-        max_results: int
-    ) -> List[SearchResult]:
+    def _simplify_query(query: str) -> str:
+        """
+        Create a shorter search query for retrying
+        when the original query returns no results.
+        """
 
-        return [
-            SearchResult(
-                title=f"[MOCK] Source {i + 1} on: {query[:60]}",
-                url=f"https://example.com/mock-source-{i + 1}",
-                snippet=(
-                    "This is a simulated search result because "
-                    "live web search was unavailable."
-                ),
-            )
-            for i in range(
-                min(max_results, 3)
-            )
-        ]
+        cleaned = re.sub(
+            r"[^\w\s-]",
+            " ",
+            query
+        )
+
+        words = cleaned.split()
+
+        # Keep the most useful portion of a long query.
+        if len(words) > 12:
+            words = words[:12]
+
+        return " ".join(words)
